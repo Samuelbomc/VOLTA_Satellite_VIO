@@ -361,3 +361,16 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ROS2
+install/
+build/
+log/
+
+# Isaac Sim
+_build/
+_build_linux/
+data/
+omni.cache/
+logs/
+*.pyc
