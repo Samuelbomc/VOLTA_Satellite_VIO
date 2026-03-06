@@ -374,3 +374,5 @@ data/
 omni.cache/
 logs/
 *.pyc
+
+/hardware
