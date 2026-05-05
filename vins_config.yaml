@@ -1,0 +1,61 @@
+%YAML:1.0
+
+# --- ROS TOPICS ---
+# Reemplaza con los nombres exactos de tus tópicos si corres VINS directo en ROS
+imu_topic: "/imu/raw"
+image_topic: "/camera/raw"
+output_path: "/home/samuelbomc/vins_output"
+
+# --- CAMERA INTRINSICS (Traducido de Basalt a VINS) ---
+model_type: PINHOLE
+camera_name: camera
+image_width: 752
+image_height: 480
+
+# Parametros Kannala-Brandt (equidistant) mapeados
+distortion_parameters:
+   k1: -0.01209933
+   k2: -0.00455076
+   p1: 0.00472093 # En VINS, p1 y p2 toman el lugar de k3 y k4 para este modelo
+   p2: -0.00210166
+projection_parameters:
+   fx: 148.88
+   fy: 148.88
+   cx: 376
+   cy: 240
+
+# --- EXTRINSICS (Camara a IMU) ---
+estimate_extrinsic: 0
+
+# Matriz de rotación (Convertida de tu Quaternion qx=1.0)
+extrinsicRotation: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 1.0,  0.0,  0.0,
+           0.0, -1.0,  0.0,
+           0.0,  0.0, -1.0]
+
+# Traslación (Tus -0.22897 en Z)
+extrinsicTranslation: !!opencv-matrix
+   rows: 3
+   cols: 1
+   dt: d
+   data: [0.0, 0.0, -0.22897]
+
+# --- IMU NOISE PARAMETERS (Traducidos de tu JSON) ---
+acc_n: 0.015          # accel_noise_std
+gyr_n: 0.00244        # gyro_noise_std
+acc_w: 0.0002         # accel_bias_std
+gyr_w: 0.0002         # gyro_bias_std
+g_norm: 9.81          # Gravedad
+
+# --- VINS SPECIFIC SETTINGS ---
+# Opciones para mejorar robustez en caída libre
+max_cnt: 150            # Maximas 'features' a rastrear (mantenlo alto para terreno desde el aire)
+min_dist: 20            # Distancia mínima entre features
+freq: 12.5                # Frecuencia de la cámara (Hz)
+F_threshold: 1.0        # Umbral RANSAC
+show_track: 1           # Mostrar GUI
+equalize: 1             # Ecualizar imagen
+fisheye: 1              # Indica que es lente gran angular

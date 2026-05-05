@@ -2,17 +2,17 @@ from pxr import Usd, Sdf, UsdShade, Vt
 
 # Get plane prim
 stage = omni.usd.get_context().get_stage()
-plane_prim = stage.GetPrimAtPath("/World/Plane")
+plane_prim = stage.GetPrimAtPath("/Environment/Plane")
 
 # Create a material and assign image
 material_path = Sdf.Path("/World/Looks/PlaneMaterial")
-image_path = "/isaac_sim/scene/ground.png"
+image_path = "D:/dev/vio/isaac_sim/scene/ground.png"
 material = UsdShade.Material.Define(stage, material_path)
 
 # Create a shader
 shader = UsdShade.Shader.Define(stage, material_path.AppendPath("Shader"))
 shader.CreateIdAttr("UsdPreviewSurface")
-shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.0)
+shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
 shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
 shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)
 shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(1.0)
@@ -37,3 +37,6 @@ shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(d
 
 # Bind the material the plane
 UsdShade.MaterialBindingAPI(plane_prim).Bind(material)
+
+
+
