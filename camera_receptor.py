@@ -141,7 +141,7 @@ class CameraTelemetryNode:
         payload = bytes([ID_CAM_TP])
         payload_len = len(payload)
         
-        data_for_crc = bytes([ID_INIT_CMD, payload_len]) + payload
+        data_for_crc = bytes([SYNC_1, SYNC_2, ID_INIT_CMD, payload_len]) + payload
         crc_calculated = self.calculate_crc16(data_for_crc)
         crc_bytes = struct.pack('<H', crc_calculated)
         
@@ -189,12 +189,12 @@ class CameraTelemetryNode:
             return "TIMEOUT"
             
         received_crc = struct.unpack('<H', crc_bytes)[0]
-        data_for_crc = bytes([packet_id, payload_len]) + payload
+        data_for_crc = bytes([SYNC_1, SYNC_2, packet_id, payload_len]) + payload
         
         if self.calculate_crc16(data_for_crc) != received_crc:
             return "ERROR_CRC"
             
-        # --- SUCCESSFUL PACKET PROCESSING ---
+        # --- PACKET ROUTING ---
         if packet_id == ID_CAM_TP:
             data = struct.unpack('<I 6f', payload)
             recv_time = time.monotonic()
@@ -280,7 +280,7 @@ if __name__ == '__main__':
             with telemetry_node.state_lock:
                 time_since_last_imu = time.monotonic() - telemetry_node.last_imu_time
                 
-            if time_since_last_imu > 3600.0: # TEMPORARY: 1 HOUR FOR TESTING
+            if time_since_last_imu > 1:
                 logging.error("WATCHDOG ALARM: No IMU data in %.1fs. Triggering hardware reset.", time_since_last_imu)
                 
                 # Safely reset UART buffers from the main thread.
