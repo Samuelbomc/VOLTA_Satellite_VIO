@@ -1,0 +1,13 @@
+[Unit]
+Description=Camera Receptor
+After=network.target
+
+[Service]
+Type=simple
+User=vins
+WorkingDirectory=/home/vins/raspberry_scripts
+ExecStart=/usr/bin/python3 /home/vins/raspberry_scripts/main.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

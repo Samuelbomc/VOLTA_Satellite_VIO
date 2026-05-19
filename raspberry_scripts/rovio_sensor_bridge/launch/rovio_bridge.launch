@@ -1,0 +1,25 @@
+<launch>
+  <node pkg="rovio_sensor_bridge" type="sensor_bridge_node.py" name="rovio_sensor_bridge" output="screen">
+    <param name="serial_port" value="/dev/serial0" />
+    <param name="baud_rate" value="115200" />
+    <param name="serial_timeout" value="0.01" />
+    <param name="image_rate" value="20.0" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="image_encoding" value="mono8" />
+    <param name="force_mono8" value="true" />
+    <param name="timestamp_skew_warn_s" value="0.005" />
+    <param name="use_latest_imu_time_for_frame" value="true" />
+
+    <!-- Example remap overrides:
+    <remap from="/imu" to="/rovio/imu" />
+    <remap from="/cam0/image_raw" to="/rovio/cam0/image_raw" />
+    -->
+  </node>
+
+  <!-- Optional: launch ROVIO alongside the bridge
+  <include file="$(find rovio)/launch/rovio_node.launch">
+    <arg name="config_file" value="$(find rovio)/config/rovio.info" />
+  </include>
+  -->
+</launch>
