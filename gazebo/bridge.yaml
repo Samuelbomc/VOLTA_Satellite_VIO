@@ -1,0 +1,42 @@
+# Configuración del puente Gazebo Harmonic <-> ROS 2
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/imu/raw"
+  gz_topic_name: "satelite/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/camera/raw"
+  gz_topic_name: "satelite/camera"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/validation"
+  gz_topic_name: "satelite/ground_truth"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/perturbaciones_gz"
+  gz_topic_name: "/world/terrain_world/wrench"
+  ros_type_name: "ros_gz_interfaces/msg/EntityWrench"
+  gz_type_name: "gz.msgs.EntityWrench"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/altimeter/raw"
+  gz_topic_name: "/satelite/altimeter"
+  ros_type_name: "ros_gz_interfaces/msg/Altimeter"
+  gz_type_name: "gz.msgs.Altimeter"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/camera/camera_info"
+  gz_topic_name: "satelite/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS

@@ -116,7 +116,7 @@ def run(
 
     while simulation_app.is_running():
         if joint_attrs:
-            # Simulacion de rotacion
+            # Rotation simulation.
             phase = (sim_time / max(joint_period_s, 1e-6)) * 2.0 * math.pi
             if sim_time >= next_scale_change_time:
                 target_scale = random.uniform(scale_min, scale_max)

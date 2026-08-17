@@ -1,3 +1,9 @@
+"""Convert an Isaac Sim/ROS bag into a Basalt/EuRoC-style dataset.
+
+The camera crop ratio and IMU noise values are approximate and should be re-tuned
+if the simulated sensor model changes.
+"""
+
 import os
 import cv2
 import csv
@@ -11,7 +17,7 @@ class BNO055NoiseModel:
         self.bg = np.zeros(3) # Gyroscope bias
         self.ba = np.zeros(3) # Accelerometer bias
         
-        # Approximate BNO055 parameters.
+        # Approximate BNO055 parameters; these are tuned for the current dataset only.
         self.sigma_a = 0.0015  # Accelerometer white noise
         self.sigma_g = 0.0017  # Gyroscope white noise
         self.sigma_ba = 1.0e-4 # Accelerometer random walk
@@ -31,7 +37,7 @@ class BNO055NoiseModel:
         self.ba += np.random.randn(3) * self.sigma_ba * np.sqrt(dt)
         self.bg += np.random.randn(3) * self.sigma_bg * np.sqrt(dt)
 
-        # Add discretized white noise and the bias.
+        # Add discretized white noise and the current bias.
         a_noisy = np.array([a_x, a_y, a_z]) + self.ba + np.random.randn(3) * self.sigma_a / np.sqrt(dt)
         g_noisy = np.array([g_x, g_y, g_z]) + self.bg + np.random.randn(3) * self.sigma_g / np.sqrt(dt)
         
@@ -80,7 +86,7 @@ def extract_bag(bag_path, out_dir):
                     writer = csv.writer(f)
                     writer.writerow([ts_ns, g_noisy[0], g_noisy[1], g_noisy[2], a_noisy[0], a_noisy[1], a_noisy[2]])
             
-            # --- GROUND TRUTH (noise-free, for pure Basalt validation) ---
+            # --- GROUND TRUTH (noise-free, for Basalt validation) ---
             elif connection.topic == '/validation':
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
                 ts_ns = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
@@ -92,7 +98,7 @@ def extract_bag(bag_path, out_dir):
                     writer = csv.writer(f)
                     writer.writerow([ts_ns, pos.x, pos.y, pos.z, ori.w, ori.x, ori.y, ori.z])
 
-            # --- CAMERA (simulated ROI and conversion to grayscale) ---
+            # --- CAMERA (mathematical simulation of the Sony IMX296 ROI) ---
             elif connection.topic == '/camera/raw':
                 msg = typestore.deserialize_cdr(rawdata, connection.msgtype)
                 ts_ns = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
@@ -104,13 +110,20 @@ def extract_bag(bag_path, out_dir):
                     # Decode the byte array into an RGB image matrix.
                     img_rgb = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
                     
-                    # Compute the centered square ROI.
+                    # Assume the 180° circle diameter spans the shorter side in Isaac Sim.
                     h, w = img_rgb.shape[:2]
-                    size = min(h, w) # The shorter side determines the ROI size.
+                    full_circle_diameter = min(h, w)
+                    
+                    # Apply the physical crop ratio used by the current camera model.
+                    # Recalibrate this value if the simulated optics change.
+                    ratio = 3.75 / 4.90
+                    size = int(full_circle_diameter * ratio)
+                    
+                    # Compute the centered crop coordinates.
                     start_y = (h - size) // 2
                     start_x = (w - size) // 2
                     
-                    # Apply the crop to simulate the hardware output.
+                    # Apply the crop that removes the circle edges.
                     img_roi = img_rgb[start_y:start_y+size, start_x:start_x+size]
                     
                     # Convert to grayscale.
@@ -124,6 +137,5 @@ def extract_bag(bag_path, out_dir):
                     writer.writerow([ts_ns, filename])
 
 if __name__ == '__main__':
-    # The '.' path assumes the script is run alongside the .mcap file.
-    extract_bag('.', 'basalt_dataset') 
+    extract_bag('isaac_sim_bag', 'basalt_dataset') 
     print("Extraction to Basalt/EuRoC format with ROI and IMU noise completed successfully.")
