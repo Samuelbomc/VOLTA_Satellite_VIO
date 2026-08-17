@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # 1. Load the data
-df = pd.read_csv('./results.csv.xlsx')
+df = pd.read_csv('results2.csv.xlsx')
 
 # 2. Modern minimalist styling setup
 bg_color = '#F8F9FA' # Off-white modern background

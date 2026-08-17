@@ -25,9 +25,11 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ImuSample:
     timestamp_s: float
-    gyro_rad_s: np.ndarray
-    accel_m_s2: np.ndarray
-    orientation_q: np.ndarray
+    gyro_rad_s: np.ndarray       # Angular velocity in body frame
+    accel_m_s2: np.ndarray       # Gravity-compensated linear acceleration in body frame
+    raw_accel_m_s2: np.ndarray   # Raw accelerometer output
+    gravity_body: np.ndarray     # Calculated gravity vector projected in body frame
+    orientation_q: np.ndarray    # Attitude quaternion
 
 @dataclass(frozen=True)
 class BaroSample:
@@ -234,15 +236,15 @@ class RobustFlowImuBaroEstimator:
         # 2. Camera to Body Frame Velocity
         v_body = self.derotation.r_cam_to_imu @ v_cam
 
-        # >>> MISSING CONSIDERATIONS APPLIED HERE <<<
+        # >>> TILT-FALL MIRAGE COMPENSATION & FRAME REFERENCE UPDATES <<<
         if np.linalg.norm(current_quat) > 0.5:
-            # 3. Tilt-Fall Mirage Compensation
+            # 3. Dynamic Gravity subtraction using active attitude
             r_world2body = R.from_quat(current_quat).inv()
             gravity_body = r_world2body.apply([0.0, 0.0, 1.0])
             v_body[0] -= gravity_body[0] * vz_baro
             v_body[1] -= gravity_body[1] * vz_baro
 
-            # 4. Correct Reference Frame: Body to World Frame Integration
+            # 4. Reference Frame alignment: Body to World Frame Integration
             r_body2world = R.from_quat(current_quat)
             v_world = r_body2world.apply(v_body)
         else:
@@ -298,6 +300,7 @@ class GazeboFlowEstimatorNode(Node):
             'features', 'dx_raw', 'dy_raw', 'dx_derot', 'dy_derot', 'dx_comp', 'dy_comp',
             'omega_cx', 'omega_cy', 'omega_cz',
             'imu_ax', 'imu_ay', 'imu_az',
+            'gravity_x', 'gravity_y', 'gravity_z',
             'gt_x', 'gt_y', 'gt_z', 'gt_qx', 'gt_qy', 'gt_qz', 'gt_qw'
         ]
         self.csv_writer.writerow(header)
@@ -324,11 +327,26 @@ class GazeboFlowEstimatorNode(Node):
         if not self.has_camera_info or not self.estimator: return
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         
+        raw_accel = np.array([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z], dtype=np.float64)
+        q = np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w], dtype=np.float64)
+        
+        # Subtract gravity using active orientation vector transformations
+        if np.linalg.norm(q) > 0.5:
+            r_body2world = R.from_quat(q)
+            # Projects World gravity [0.0, 0.0, 9.81] into the Body Coordinate System
+            gravity_body = r_body2world.inv().apply([0.0, 0.0, 9.81])
+        else:
+            gravity_body = np.array([0.0, 0.0, 9.81], dtype=np.float64)
+            
+        linear_accel = raw_accel - gravity_body
+        
         imu_sample = ImuSample(
             timestamp_s=t,
             gyro_rad_s=np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float64),
-            accel_m_s2=np.array([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z], dtype=np.float64),
-            orientation_q=np.array([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w], dtype=np.float64)
+            accel_m_s2=linear_accel,
+            raw_accel_m_s2=raw_accel,
+            gravity_body=gravity_body,
+            orientation_q=q
         )
         self.last_imu = imu_sample
         self.estimator.ingest_imu(imu_sample)
@@ -364,6 +382,7 @@ class GazeboFlowEstimatorNode(Node):
                 lg.get('dx_derot', 0.0), lg.get('dy_derot', 0.0), lg.get('dx_comp', 0.0), lg.get('dy_comp', 0.0),
                 lg.get('omega_cx', 0.0), lg.get('omega_cy', 0.0), lg.get('omega_cz', 0.0),
                 imu.accel_m_s2[0] if imu else 0.0, imu.accel_m_s2[1] if imu else 0.0, imu.accel_m_s2[2] if imu else 0.0,
+                imu.gravity_body[0] if imu else 0.0, imu.gravity_body[1] if imu else 0.0, imu.gravity_body[2] if imu else 0.0,
                 gt.pose.pose.position.x if gt else 0.0, gt.pose.pose.position.y if gt else 0.0, gt.pose.pose.position.z if gt else 0.0,
                 gt.pose.pose.orientation.x if gt else 0.0, gt.pose.pose.orientation.y if gt else 0.0, gt.pose.pose.orientation.z if gt else 0.0, gt.pose.pose.orientation.w if gt else 0.0,
             ])

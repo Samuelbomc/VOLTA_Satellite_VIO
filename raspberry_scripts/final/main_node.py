@@ -4,36 +4,32 @@ import struct
 import time
 import os
 import subprocess
-from dataclasses import dataclass
-from typing import Any, Optional, Tuple
-
 import cv2
 import numpy as np
-import rclpy
 import serial
-from cv_bridge import CvBridge
-from nav_msgs.msg import Odometry
-from rclpy.node import Node
-from sensor_msgs.msg import Image, Imu
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Any, Optional, Tuple
 
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.CRITICAL + 1, format='%(levelname)s: %(message)s')
+logging.disable(logging.CRITICAL)
 LOGGER = logging.getLogger(__name__)
 
-SERIAL_PORT = '/dev/ttyS0'
+SERIAL_PORT = '/dev/ttyAMA0'
 BAUD_RATE = 115200
-SERIAL_TIMEOUT = 0.02
+SERIAL_TIMEOUT = 3
 READ_MAX_TIME = 0.1
+REQUIRE_FLIGHT_STATE_5 = False # CAMBIAR ANTES DE VUELO!!!!!!!!!!!!!!!!!!!!!!!
 
 SYNC_1 = 0xAA
 SYNC_2 = 0x55
-ID_CAM_TP = 0x11
+ID_CAM_TP = 0x10 # El ID del paquete de Control
 ID_INIT_CMD = 0xF0
 
-LEN_CAM_TP = 32
+LEN_CAM_TP = 53
 LEN_INIT_CMD = 1
 MAX_PAYLOAD = 64
 
@@ -45,34 +41,78 @@ IMAGE_HEIGHT = 1088
 # ==========================================
 # DATA TYPES
 # ==========================================
+
+
 @dataclass(frozen=True)
 class ImuPacket:
     recv_time: float
     timestamp_ms: int
     baro_msl_m: float
+    vertical_velocity_m_s: float
     ax: float
     ay: float
     az: float
     gx: float
     gy: float
     gz: float
+    qw: float
+    qx: float
+    qy: float
+    qz: float
+    flight_state: int
 
     @staticmethod
     def from_tuple(
         recv_time: float,
-        data: Tuple[int, float, float, float, float, float, float, float],
+        data: Tuple[
+            int,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            float,
+            int,
+        ],
     ) -> "ImuPacket":
-        timestamp_ms, baro_msl_m, ax, ay, az, gx, gy, gz = data
+        (
+            timestamp_ms,
+            baro_msl_m,
+            vertical_velocity_m_s,
+            ax,
+            ay,
+            az,
+            gx,
+            gy,
+            gz,
+            qw,
+            qx,
+            qy,
+            qz,
+            flight_state,
+        ) = data
         return ImuPacket(
             recv_time=recv_time,
             timestamp_ms=timestamp_ms,
             baro_msl_m=baro_msl_m,
+            vertical_velocity_m_s=vertical_velocity_m_s,
             ax=ax,
             ay=ay,
             az=az,
             gx=gx,
             gy=gy,
             gz=gz,
+            qw=qw,
+            qx=qx,
+            qy=qy,
+            qz=qz,
+            flight_state=flight_state,
         )
 
 @dataclass(frozen=True)
@@ -189,10 +229,9 @@ class GyroDeRotation:
     def __init__(self):
         self.last_imu_time: Optional[float] = None
         self.last_omega = np.zeros(3)
-        # Rotation matrix from camera to IMU (empirical). Kept for real-world mapping.
         self.r_cam_to_imu = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
             [0.0, 0.0, -1.0],
         ], dtype=np.float64)
 
@@ -206,7 +245,7 @@ class GyroDeRotation:
         self.last_omega = imu.gyro_rad_s
 
     def imu_to_camera(self, omega_imu: np.ndarray) -> np.ndarray:
-        # Convert angular rate from IMU frame to camera frame
+        """Convert angular rate from IMU frame to camera frame."""
         return self.r_cam_to_imu.T @ omega_imu
 
     def compensate_flow(
@@ -251,8 +290,7 @@ class RobustFlowImuBaroEstimator:
     Uses fisheye undistortion (real-world camera) as in the original main node.
     """
 
-    def __init__(self, reference_msl_m: float = 916.0):
-        # Real-world calibration kept from main_node
+    def __init__(self, reference_msl_m: float = 0):
         if hasattr(self, 'camera_matrix'):
             pass
         self.camera_matrix = np.array(
@@ -270,7 +308,7 @@ class RobustFlowImuBaroEstimator:
         self.last_baro: Optional[BaroSample] = None
         self.imu_buffer: list[ImuSample] = []
 
-        # Diagnostics/logging container (exposed for CSV output)
+        # Diagnostics/logging container
         self.logs = {}
 
     def ingest_imu(self, imu: ImuSample) -> None:
@@ -292,7 +330,6 @@ class RobustFlowImuBaroEstimator:
         - compute velocity in camera frame and map to body
         - low-pass blend into state
         """
-        # reset diagnostics
         self.logs = {k: 0.0 for k in [
             'dt','features','omega_cx','omega_cy','omega_cz',
             'dx_raw','dy_raw','dx_derot','dy_derot','dx_comp','dy_comp',
@@ -337,7 +374,7 @@ class RobustFlowImuBaroEstimator:
 
         self.logs['features'] = float(len(pts_curr))
 
-        # Use fisheye undistortions (real-world camera model)
+        # Use fisheye undistortions
         try:
             pts_prev_norm = cv2.fisheye.undistortPoints(pts_prev.reshape(-1,1,2), self.camera_matrix, self.dist_coeffs).reshape(-1,2)
             pts_curr_norm = cv2.fisheye.undistortPoints(pts_curr.reshape(-1,1,2), self.camera_matrix, self.dist_coeffs).reshape(-1,2)
@@ -355,7 +392,7 @@ class RobustFlowImuBaroEstimator:
         self.logs['dx_derot'] = float(np.median(derot_flow[:,0]))
         self.logs['dy_derot'] = float(np.median(derot_flow[:,1]))
 
-        # Looming compensation (vertical motion scale)
+        # Looming compensation
         vz_baro = 0.0 if self.state is None else (z_agl - self.state.agl_m) / dt
         self.logs['vz_baro'] = vz_baro
 
@@ -403,22 +440,16 @@ class RobustFlowImuBaroEstimator:
 
 
 # ==========================================
-# ROS 2 NODE AND MAIN LOOP
+# MAIN LOOP
 # ==========================================
-class FlowEstimatorNode(Node):
+class FlowEstimatorNode:
     def __init__(self, port: str, baud_rate: int, timeout: float):
-        super().__init__('flow_imu_baro_node')
         self.port_name = port
         self.baud_rate = baud_rate
         self.timeout = timeout
         self.serial_conn: Optional[serial.Serial] = None
 
         self.estimator = RobustFlowImuBaroEstimator()
-        self.bridge = CvBridge()
-        
-        self.imu_pub = self.create_publisher(Imu, '/imu0', 100)
-        self.cam_pub = self.create_publisher(Image, '/cam0/image_raw', 10)
-        self.state_pub = self.create_publisher(Odometry, '/odom', 10)
 
         self.is_running = False
         self.last_init_time = 0.0
@@ -428,24 +459,27 @@ class FlowEstimatorNode(Node):
         self.init_received = False
         self.last_baro_msl: Optional[float] = None
         self.has_imu_data = False
+        self.last_imu: Optional[ImuSample] = None
+        self.last_flight_state: Optional[int] = None
+        self.require_flight_state_5 = REQUIRE_FLIGHT_STATE_5
 
-        # Diagnostics: always enabled (write full logs)
+        # Diagnostics: always enabled
         self.enable_diagnostics = True
         # Maximum number of corrected images to save
         self.max_saved_corrected = 1000
 
-        # Results directory for raw / corrected frames
-        self.results_dir = Path('results')
+        self.session_stamp = time.strftime('%Y%m%d_%H%M%S')
+        # Results directory for corrected frames
+        self.results_dir = Path(f'results_{self.session_stamp}')
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.saved_corrected_count = 0
-        # track last time we wrote images to results/ (save every 2 seconds)
+        # track last time we wrote images to results
         self.last_results_save_time = 0.0
         LOGGER.debug("TEMP: results directory initialized at %s", str(self.results_dir))  # TEMP log
 
-        # CSV: always include extended diagnostics fields
-        self.csv_file = open('results.csv', 'w', newline='')
+        self.csv_file = open(f'results_{self.session_stamp}.csv', 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
-        # Extended diagnostic header (matches estimator.logs keys)
+        # Extended diagnostic header
         header = [
             'timestamp', 'dt', 'pos_x', 'pos_y', 'agl',
             'vel_x_filt', 'vel_y_filt', 'vel_x_raw', 'vel_y_raw', 'vz_baro',
@@ -549,6 +583,8 @@ class FlowEstimatorNode(Node):
 
     def listen_and_decode(self) -> str:
         if not self.wait_for_sync():
+            if self.init_received:
+                return "NO_DATA"
             LOGGER.debug("TEMP: sync not found")  # TEMP log
             return "SYNC_LOST"
 
@@ -559,6 +595,7 @@ class FlowEstimatorNode(Node):
 
         packet_id = header[0]
         payload_len = header[1]
+        LOGGER.debug("TEMP: UART header received id=0x%02X len=%d", packet_id, payload_len)  # TEMP log
 
         if payload_len > MAX_PAYLOAD:
             LOGGER.debug("TEMP: payload too large: %d", payload_len)  # TEMP log
@@ -591,6 +628,7 @@ class FlowEstimatorNode(Node):
         if not payload:
             LOGGER.debug("TEMP: payload timeout")  # TEMP log
             return "TIMEOUT"
+        LOGGER.debug("TEMP: UART payload received (%d bytes): %s", payload_len, payload.hex())  # TEMP log
 
         crc_bytes = self.read_exact_bytes(2)
         if not crc_bytes:
@@ -598,6 +636,7 @@ class FlowEstimatorNode(Node):
             return "TIMEOUT"
 
         received_crc = struct.unpack('<H', crc_bytes)[0]
+        LOGGER.debug("TEMP: UART CRC received: 0x%04X", received_crc)  # TEMP log
         data_for_crc = bytes([SYNC_1, SYNC_2, packet_id, payload_len]) + payload
 
         if self.calculate_crc16(data_for_crc) != received_crc:
@@ -608,7 +647,7 @@ class FlowEstimatorNode(Node):
             if not self.init_received:
                 LOGGER.debug("TEMP: IMU received before init")  # TEMP log
                 return "IMU_BEFORE_INIT"
-            data = struct.unpack('<I f 6f', payload)
+            data = struct.unpack('<I f f 3f 3f 4f B', payload)
             recv_time = time.monotonic()
 
             self.last_imu_time = recv_time
@@ -638,11 +677,13 @@ class FlowEstimatorNode(Node):
         packet = ImuPacket.from_tuple(recv_time, data)
         LOGGER.debug("TEMP: parsed IMU packet")  # TEMP log
         self.has_imu_data = True
+        self.last_flight_state = packet.flight_state
         imu_sample = ImuSample(
             timestamp_s=packet.recv_time,
             gyro_rad_s=np.array([packet.gx, packet.gy, packet.gz], dtype=np.float64),
             accel_m_s2=np.array([packet.ax, packet.ay, packet.az], dtype=np.float64),
         )
+        self.last_imu = imu_sample
         self.estimator.ingest_imu(imu_sample)
         LOGGER.debug("TEMP: imu ingested into estimator")  # TEMP log
         if self.last_baro_msl is None or abs(packet.baro_msl_m - self.last_baro_msl) > 1e-3:
@@ -651,20 +692,6 @@ class FlowEstimatorNode(Node):
                 BaroSample(timestamp_s=packet.recv_time, altitude_msl_m=packet.baro_msl_m)
             )
             LOGGER.debug("TEMP: baro ingested: %.3f", packet.baro_msl_m)  # TEMP log
-        self.publish_imu(packet)
-
-    def publish_imu(self, packet: ImuPacket) -> None:
-        msg = Imu()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'imu_link'
-        msg.linear_acceleration.x = float(packet.ax)
-        msg.linear_acceleration.y = float(packet.ay)
-        msg.linear_acceleration.z = float(packet.az)
-        msg.angular_velocity.x = float(packet.gx)
-        msg.angular_velocity.y = float(packet.gy)
-        msg.angular_velocity.z = float(packet.gz)
-        self.imu_pub.publish(msg)
-        LOGGER.debug("TEMP: published IMU message")  # TEMP log
 
     def capture_frame(self, frame_time: float) -> None:
         if not self.has_imu_data:
@@ -673,9 +700,6 @@ class FlowEstimatorNode(Node):
 
         nombre_salida = "/tmp/captura_gris.jpg"
         
-        # Optimized parameters for instant photo capture:
-        # -t 0 removes preview delay.
-        # --immediate forces immediate sensor capture.
         comando = [
             "rpicam-still",
             "-o", nombre_salida,
@@ -696,6 +720,16 @@ class FlowEstimatorNode(Node):
                 if frame is None:
                     LOGGER.debug("TEMP: failed to read capture (empty image)")  # TEMP log
                     return
+                height, width = frame.shape[:2]
+                crop_width, crop_height = 640, 480
+                if width < crop_width or height < crop_height:
+                    LOGGER.warning(
+                        "TEMP: captured frame too small for crop: %dx%d", width, height
+                    )
+                    return
+                x_start = (width - crop_width) // 2
+                y_start = (height - crop_height) // 2
+                frame = frame[y_start:y_start + crop_height, x_start:x_start + crop_width]
             else:
                 LOGGER.debug("TEMP: capture file not found: %s", nombre_salida)  # TEMP log
                 return
@@ -707,35 +741,25 @@ class FlowEstimatorNode(Node):
             LOGGER.error(f"TEMP: unexpected error while taking photo: {e}")
             return
 
-        # Save raw/corrected frames to results every 2 seconds
+        # Save raw/corrected frames to results every 0.5 seconds
         now = frame_time
-        if now - self.last_results_save_time >= 2.0:
-            # Save raw frame to results directory
-            try:
-                raw_filename = self.results_dir / f'raw_{now:.6f}.png'
-                cv2.imwrite(str(raw_filename), frame)
-                LOGGER.debug("TEMP: saved raw frame %s", raw_filename)  # TEMP log
-            except Exception as e:
-                LOGGER.error("TEMP: failed to save raw frame: %s", e)
-
-            # Save a corrected (undistorted) version using estimator intrinsics
+        if now - self.last_results_save_time >= 0.5:
+            # Save a corrected version using estimator intrinsics
             try:
                 if hasattr(self.estimator, 'camera_matrix') and hasattr(self.estimator, 'dist_coeffs'):
                     corrected = cv2.undistort(frame, self.estimator.camera_matrix, self.estimator.dist_coeffs)
                     if self.saved_corrected_count < self.max_saved_corrected:
                         corrected_filename = self.results_dir / f'corrected_{self.saved_corrected_count:04d}.png'
                         cv2.imwrite(str(corrected_filename), corrected)
-                        LOGGER.debug("TEMP: saved corrected frame %s", corrected_filename)  # TEMP log
                         self.saved_corrected_count += 1
             except Exception as e:
-                LOGGER.error("TEMP: failed to save corrected frame: %s", e)
+                LOGGER.error("Failed to save corrected frame: %s", e)
 
             self.last_results_save_time = now
 
         frame_sample = FrameSample(timestamp_s=frame_time, image_bgr=frame)
         self.estimator.ingest_frame(frame_sample)
         LOGGER.debug("TEMP: frame ingested into estimator")  # TEMP log
-        self.publish_frame(frame_sample)
 
         state = self.estimator.current_state()
         if state is not None:
@@ -772,33 +796,6 @@ class FlowEstimatorNode(Node):
         else:
             LOGGER.debug("TEMP: no valid state estimate available for CSV")  # TEMP log
 
-    def publish_frame(self, frame: FrameSample) -> None:
-        try:
-            msg = self.bridge.cv2_to_imgmsg(frame.image_bgr, encoding="bgr8")
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = 'camera_link'
-            self.cam_pub.publish(msg)
-            LOGGER.debug("TEMP: published camera frame")  # TEMP log
-        except Exception as exc:
-            self.get_logger().error(f"TEMP: error converting image: {exc}")
-
-    def publish_state(self, state: StateEstimate) -> None:
-        msg = Odometry()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'map'
-        msg.child_frame_id = 'base_link'
-        msg.pose.pose.position.x = float(state.position_m[0])
-        msg.pose.pose.position.y = float(state.position_m[1])
-        msg.pose.pose.position.z = float(state.agl_m)
-        msg.pose.pose.orientation.x = float(state.attitude_quat[0])
-        msg.pose.pose.orientation.y = float(state.attitude_quat[1])
-        msg.pose.pose.orientation.z = float(state.attitude_quat[2])
-        msg.pose.pose.orientation.w = float(state.attitude_quat[3])
-        msg.twist.twist.linear.x = float(state.velocity_m_s[0])
-        msg.twist.twist.linear.y = float(state.velocity_m_s[1])
-        msg.twist.twist.linear.z = float(state.velocity_m_s[2])
-        self.state_pub.publish(msg)
-        LOGGER.debug("TEMP: published state message")  # TEMP log
 
     def read_baro_msl(self) -> Optional[float]:
         """Preventive wrapper to avoid AttributeErrors from the main loop."""
@@ -806,19 +803,19 @@ class FlowEstimatorNode(Node):
 
 
 def main() -> None:
-    rclpy.init()
     node = FlowEstimatorNode(SERIAL_PORT, BAUD_RATE, SERIAL_TIMEOUT)
 
     try:
         node.connect()
         LOGGER.info("TEMP: system operational. Watchdog running.")  # TEMP log
 
-        while node.is_running and rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.001)
-
+        while node.is_running:
             node.listen_and_decode()
 
             now = time.monotonic()
+
+            if node.require_flight_state_5 and node.last_flight_state != 5:
+                continue
 
             # Do not process frames or barometer until init handshake is complete
             if node.init_received:
@@ -830,7 +827,7 @@ def main() -> None:
                 if baro_msl is not None:
                     node.estimator.ingest_baro(BaroSample(timestamp_s=now, altitude_msl_m=baro_msl))
 
-            # Watchdog timing (checks run regardless of init state but action below requires init)
+            # Watchdog timing
             if now - node.last_watchdog_check < 0.5:
                 continue
             node.last_watchdog_check = now
@@ -853,8 +850,6 @@ def main() -> None:
         LOGGER.info("TEMP: initiating safe shutdown...")  # TEMP log
         node.is_running = False
         node.close()
-        node.destroy_node()
-        rclpy.shutdown()
         LOGGER.info("TEMP: system closed safely.")  # TEMP log
 
 
